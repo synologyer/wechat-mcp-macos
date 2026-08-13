@@ -260,19 +260,4 @@ echo ""
 echo "=== 检查完成 ==="
 echo ""
 
-# 统计
-total=0
-passed=0
-failed=0
-warnings=0
-while IFS= read -r line; do
-    total=$((total + 1))
-    case "$line" in
-        ✅*) passed=$((passed + 1)) ;;
-        ❌*) failed=$((failed + 1)) ;;
-        ⚠️*) warnings=$((warnings + 1)) ;;
-    esac
-done < <(echo "$0" | bash 2>/dev/null)
-
-# 简单统计（从本次输出）
-echo "运行 'bash $0' 查看完整状态"
+echo "运行 'bash $0' 可重新查看完整状态"
