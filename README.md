@@ -14,7 +14,7 @@ prompts/render.py                 ← 匹配 chat → 取数 → 压缩上下文
     ├── templates/                ← LLM 模板文件
     └── summaries/                ← 生成的长图与中间产物
     ↓
-scripts/group-summary-workflow.sh ← prepare / render 一键流水线
+scripts/chat-summary-workflow.sh  ← prepare / render 一键流水线
     ├── enrich_summary_json.py    ← 注入统计、热度、活跃群友、关键词 tag
     └── validate_summary_json.py  ← 渲染前自检
     ↓
@@ -22,6 +22,8 @@ backend/.venv/                    ← Python 运行时（wechat_mcp_macos 包）
     ├── pipeline.py               ← 纯规则总结 + 联系人解析
     ├── summary_img.py            ← 长图渲染
     └── voice_to_text.py          ← 语音转文字
+cleanup.py                       ← 中间数据清理（时间+容量双阈值）
+cleanup-policy.json              ← 清理策略配置
 
 contacts.json                    ← 从 contact.db 解密的通讯录（6000+ 条）
 group_nicknames.json             ← 群成员补充昵称映射（fallback）
@@ -71,41 +73,45 @@ sudo backend/.venv/bin/python init-keys.py
 
 ### 3. 生成总结
 
-默认日报口径：
-- `hours=0` 表示**今天自然日 0:00 到现在**
-- 不再默认使用 rolling 24h，避免跨天和 token 膨胀
-- LLM 默认读取**压缩上下文**，不再直接吞全量原始聊天
+默认日报口径，日界线 04:00：
+- `--today`：本逻辑日 04:00 至现在
+- `--yesterday`：上一个逻辑日 04:00 至本逻辑日 04:00
+- `--start/--end`：任意日期区间，结束日期包含整天
+- LLM 读取**压缩上下文**，不再直接吞全量原始聊天
 
 ```bash
-# 统一切记用 backend/.venv/bin/python 执行
 cd wechat-mcp-macos
 
-# 纯规则总结（零 token）
-backend/.venv/bin/python pipeline.py --dry-run --hours 24
-
-# 指定群
-backend/.venv/bin/python pipeline.py --dry-run --hours 24 --chat "琅泽"
-
-# JSON 输出（供链式调用）
-backend/.venv/bin/python pipeline.py --dry-run --hours 24 --json
-
-# Prompt 渲染（匹配 registry → 填充 LLM 模板）
-backend/.venv/bin/python prompts/render.py "琅泽群" --hours 48
-
-# 日期区间查询（默认日界线 04:00，结束日期包含整天）
+# 日期区间查询
 backend/.venv/bin/python scripts/chat_query.py "钟子鹏" \
   --start 2026-07-25 --end 2026-07-31
 
-# 一键准备：群聊和私聊通用，取数 + 压缩上下文 + LLM JSON Prompt
+# 一键准备：取数 + 压缩上下文 + LLM JSON Prompt
 bash scripts/chat-summary-workflow.sh prepare \
-  --chat "钟子鹏" --start 2026-07-25 --end 2026-07-31
+  --chat "琅泽" --yesterday
 
-# 一键出图：render 自动 enrich + validate，再出图
+# AI 生成 summary.json 后，一键出图
 bash scripts/chat-summary-workflow.sh render /path/to/summary.json
 
-# 单独校验增强版 JSON
-backend/.venv/bin/python scripts/validate_summary_json.py /path/to/summary.enriched.json
+# 查看清理状态
+backend/.venv/bin/python cleanup.py --check
 ```
+
+#### summary.json 字段规范
+
+```json
+{
+  "header": { "title", "date", "stats", "hot_word" },
+  "summary": ["省流结论"],
+  "topics": [{ "title", "time", "summary", "detail", "quotes": [{ "name", "avatar_name", "avatar_username", "content" }] }],
+  "activity": [{ "label": "HH:00", "count": N }],  // 必须 24 个点
+  "top_speakers": [{ "name", "count" }],  // 字段名是 count，不是 messages
+  "keyword_tags": ["热词"],
+  "report_meta": { "is_group", "activity_granularity", "raw_chars", "compressed_chars", "chars_saved", "estimated_tokens_saved", "compression_ratio" }
+}
+```
+
+⚠️ 禁止手写 JSON，必须由 AI 分析 context.json 后生成。完整流程见 `skill/SKILL.md`。
 
 ## 联系人解析
 
@@ -157,19 +163,26 @@ wechat-mcp-macos/
 ├── backend/
 │   └── .venv/              # Python 运行时（wechat_mcp_macos 包）
 ├── plugin/                 # Hana 插件（manifest.json + 4 tools）
-├── skill/                  # Hana Agent skill
+├── skill/                  # Hana Agent skill（含完整流程规范）
 ├── prompts/                # Prompt 管理系统
 │   ├── registry.json       # trigger 定义
 │   ├── render.py           # 匹配引擎
 │   ├── templates/          # LLM prompt 模板文件
-│   └── summaries/          # 生成的长图（.gitignore）
+│   └── summaries/          # 生成的长图与中间产物（.gitignore）
+├── scripts/                # 工具脚本
+│   ├── chat-summary-workflow.sh  # 总结流水线（prepare/render）
+│   ├── chat_query.py       # 日期区间查询
+│   ├── enrich_summary_json.py    # 注入统计、热度、活跃群友
+│   └── validate_summary_json.py  # JSON 格式校验
 ├── pipeline.py             # 纯规则总结 + 联系人解析
 ├── summary_img.py          # 长图渲染
 ├── voice_to_text.py        # 语音转文字
+├── cleanup.py              # 中间数据清理（时间+容量双阈值）
+├── cleanup-policy.json     # 清理策略配置
 ├── contacts.json           # 通讯录映射（从 contact.db 解密）
 ├── group_nicknames.json    # 群成员补充昵称（fallback）
 ├── crypto/                 # 解密模块
-├── scripts/                # 日期解析、区间查询、群聊/私聊总结流水线
+├── tests/                  # 单元测试
 └── .gitignore
 ```
 
