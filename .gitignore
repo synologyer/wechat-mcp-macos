@@ -21,3 +21,14 @@ config.json
 
 # Prompt 生成的图片
 prompts/summaries/
+
+# Claude local setup, captured keys and chat databases
+backend/.venv/
+private*/
+.wechat-mcp/
+*keys*.json
+*.db
+*.db-wal
+*.db-shm
+*.backup-*
+LOCAL_SETUP.md

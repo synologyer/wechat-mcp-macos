@@ -2,7 +2,13 @@
 
 macOS 微信本地数据读取。解密本地数据库，读取聊天记录、搜索、语音转文字、生成群聊总结。
 
-**零 API 调用，纯本地运行，不修改原始数据库。**
+**数据库解密与查询在本机进行，不修改原始数据库；交给 Claude 等云端模型的正文会发送到相应服务。**
+
+## Claude 桌面版与微信分身
+
+本 fork 提供独立的 Claude Desktop 只读连接、明确账户路径配置，以及启动时捕获并验证密钥的工具。Apple Silicon 微信 4.2.0 分身已验证该路线可用，不需要手动转发聊天记录。
+
+**请优先按照 [Claude 桌面版安装指南](docs/CLAUDE.md) 操作。** 这条路线不会开放发消息或自动重新签名功能。以下保留原 Hana 工作流说明。
 
 ## 架构
 
@@ -48,7 +54,7 @@ group_nicknames.json             ← 群成员补充昵称映射（fallback）
 ### 1. 克隆并创建环境
 
 ```bash
-git clone https://github.com/yancongya/wechat-mcp-macos.git
+git clone https://github.com/synologyer/wechat-mcp-macos.git
 cd wechat-mcp-macos
 
 # 创建 Python 运行时环境
@@ -67,7 +73,8 @@ pip3 install Pillow --break-system-packages
 ### 2. 提取密钥
 
 ```bash
-# 确保微信已登录，需要 sudo 权限
+# 仅原 Hana 工作流：脚本可能重新签名默认微信，必须事先审查并确认。
+# Claude / 分身用户请改用 docs/CLAUDE.md，勿直接运行此命令。
 sudo backend/.venv/bin/python init-keys.py
 ```
 
