@@ -1,32 +1,18 @@
-# 敏感数据
-key.txt
-wechat_keys.json
-contacts.json
-all_keys.json
-
-# Python
+# Python environments and generated files
+.venv/
 __pycache__/
 *.pyc
-.venv/
-
-# 解密缓存
-decrypted/
-
-# 系统
 .DS_Store
 *.log
 
-# 配置（本地生成）
-config.json
-
-# Prompt 生成的图片
-prompts/summaries/
-
-# Claude local setup, captured keys and chat databases
-backend/.venv/
+# Private runtime data: never publish
 private*/
 .wechat-mcp/
 *keys*.json
+key.txt
+contacts.json
+config.json
+decrypted/
 *.db
 *.db-wal
 *.db-shm

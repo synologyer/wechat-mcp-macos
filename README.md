@@ -1,304 +1,121 @@
-# WeChat MCP macOS
+# 微信聊天记录 · Claude 桌面版只读连接
 
-macOS 微信本地数据读取。解密本地数据库，读取聊天记录、搜索、语音转文字、生成群聊总结。
+让 Claude 桌面版直接查询本机微信聊天记录，无需逐次手动转发。支持明确选择默认微信或独立分身的数据目录。
 
-**数据库解密与查询在本机进行，不修改原始数据库；交给 Claude 等云端模型的正文会发送到相应服务。**
+本项目只提供 **Claude Desktop + 本机微信数据库读取**：不发消息、不自动回复、不重新签名、不定时监听。数据库在本机解密；通过工具返回给 Claude 的正文会进入 Claude 的模型服务。
 
-## Claude 桌面版与微信分身
+## 可以做什么
 
-本 fork 提供独立的 Claude Desktop 只读连接、明确账户路径配置，以及启动时捕获并验证密钥的工具。Apple Silicon 微信 4.2.0 分身已验证该路线可用，不需要手动转发聊天记录。
+| 功能 | Claude 工具 |
+| --- | --- |
+| 检查配置和可用密钥数量 | `connection_status` |
+| 查看最近会话 | `list_chats` |
+| 列出群聊 | `list_groups` |
+| 读取指定会话消息 | `read_messages` |
+| 搜索消息 | `search` |
+| 检查指定会话的新消息数量 | `check_new` |
 
-**请优先按照 [Claude 桌面版安装指南](docs/CLAUDE.md) 操作。** 这条路线不会开放发消息或自动重新签名功能。以下保留原 Hana 工作流说明。
+读取范围是**所选微信账户**，目前没有群白名单；提示词不是权限隔离。自动归档、定时日报、语音转写和长图生成不属于当前功能。
 
-## 架构
+## 环境和验证范围
 
-```
-plugin/ + skill/                  ← Hana Agent 集成层
-    ↓ 对话触发
-prompts/render.py                 ← 匹配 chat → 取数 → 压缩上下文 → 生成给 LLM 的 JSON prompt
-    ├── registry.json             ← 按群/联系人配置不同 prompt
-    ├── templates/                ← LLM 模板文件
-    └── summaries/                ← 生成的长图与中间产物
-    ↓
-scripts/chat-summary-workflow.sh  ← prepare / render 一键流水线
-    ├── enrich_summary_json.py    ← 注入统计、热度、活跃群友、关键词 tag
-    └── validate_summary_json.py  ← 渲染前自检
-    ↓
-backend/.venv/                    ← Python 运行时（wechat_mcp_macos 包）
-    ├── pipeline.py               ← 纯规则总结 + 联系人解析
-    ├── summary_img.py            ← 长图渲染
-    └── voice_to_text.py          ← 语音转文字
-cleanup.py                       ← 中间数据清理（时间+容量双阈值）
-cleanup-policy.json              ← 清理策略配置
+- macOS、Claude 桌面 App、Python 3.12；捕获密钥需要 Xcode Command Line Tools 和 Apple 自带 Python/LLDB。
+- 密钥捕获只支持原生 Apple Silicon ARM64。
+- 微信 4.2.0（270348）分身已验证启动捕获路线，21 个数据库密钥通过认证，并完成 MCP 实际读取。
+- 通用捕获脚本另经自建程序验证；没有为发布再次重启真实微信。其他微信版本、Intel/Rosetta 和不同签名状态不保证可用。
 
-contacts.json                    ← 从 contact.db 解密的通讯录（6000+ 条）
-group_nicknames.json             ← 群成员补充昵称映射（fallback）
-```
+## 从安装到使用
 
-## 功能
+所有命令在项目根目录执行。路径示例必须替换为本人的实际路径。
 
-| 能力 | 入口 | 原理 |
-|------|------|------|
-| 读取聊天记录 | `wechat_read` | 解密 SQLCipher 4 本地数据库直接查询 |
-| 关键词搜索 | `wechat_search` | 跨群全文搜索，按发送者/时间分组 |
-| 群聊列表 | `wechat_groups` | 列出所有微信群名称 |
-| 纯规则总结 | `pipeline.py` | 零 LLM：活跃度/话题/时间线/热词 |
-| 语音转文字 | `voice_to_text.py` | SILK 解码 + faster-whisper |
-| 结构化管理 Prompt | `prompts/render.py` | registry 匹配 chat → 压缩上下文 → 生成给 LLM 的 JSON prompt |
-| 日期区间查询 | `scripts/chat_query.py` | 群聊/私聊、任意日期区间、双方身份和头像 wxid |
-| 总结流水线 | `scripts/chat-summary-workflow.sh` | prepare / render 一键串联取数、enrich、自检、出图 |
-| 长图渲染 | `summary_img.py` | AI 总结 JSON + 统计增强数据 → Pillow 渲染为图片 |
-
-## 快速开始
-
-### 1. 克隆并创建环境
+### 1. 下载并安装
 
 ```bash
 git clone https://github.com/synologyer/wechat-mcp-macos.git
 cd wechat-mcp-macos
-
-# 创建 Python 运行时环境
 python3 -m venv backend/.venv
-
-# 安装核心 Python 包
-backend/.venv/bin/pip install wechat-mcp-macos
-
-# 安装项目依赖
-backend/.venv/bin/pip install -r requirements.txt
-
-# 长图生成需要 Pillow
-pip3 install Pillow --break-system-packages
+backend/.venv/bin/python -m pip install -r requirements.txt
 ```
 
-### 2. 提取密钥
+### 2. 选择要读取的微信账户
+
+数据库通常位于：
+
+```text
+~/Library/Containers/<实际 Bundle ID>/Data/Documents/xwechat_files/<账户目录>/db_storage
+```
+
+分身不一定使用默认微信的 Bundle ID。确认目录下有 `contact/contact.db`，先预览，再保存：
 
 ```bash
-# 仅原 Hana 工作流：脚本可能重新签名默认微信，必须事先审查并确认。
-# Claude / 分身用户请改用 docs/CLAUDE.md，勿直接运行此命令。
-sudo backend/.venv/bin/python init-keys.py
+backend/.venv/bin/python scripts/configure_claude.py --db-dir '/你的账户目录/db_storage'
+backend/.venv/bin/python scripts/configure_claude.py --db-dir '/你的账户目录/db_storage' --apply
 ```
 
-### 3. 生成总结
+此步骤配置 Claude，保留已有其他 MCP 连接并备份配置；不会提取密钥或重启微信。
 
-默认日报口径，日界线 04:00：
-- `--today`：本逻辑日 04:00 至现在
-- `--yesterday`：上一个逻辑日 04:00 至本逻辑日 04:00
-- `--start/--end`：任意日期区间，结束日期包含整天
-- LLM 读取**压缩上下文**，不再直接吞全量原始聊天
+### 3. 获取并验证密钥
+
+已有本账户有效密钥可跳过捕获，直接验证导入。首次获取时，先保存草稿，**正常退出指定微信，暂时不要手动打开**；下面的工具会启动它。
 
 ```bash
-cd wechat-mcp-macos
-
-# 日期区间查询
-backend/.venv/bin/python scripts/chat_query.py "钟子鹏" \
-  --start 2026-07-25 --end 2026-07-31
-
-# 一键准备：取数 + 压缩上下文 + LLM JSON Prompt
-bash scripts/chat-summary-workflow.sh prepare \
-  --chat "琅泽" --yesterday
-
-# AI 生成 summary.json 后，一键出图
-bash scripts/chat-summary-workflow.sh render /path/to/summary.json
-
-# 查看清理状态
-backend/.venv/bin/python cleanup.py --check
+PYTHONPATH="$(/usr/bin/lldb -P)" /usr/bin/python3 scripts/capture_launch_keys.py \
+  --app '/Applications/工作.app' \
+  --db-dir '/你的账户目录/db_storage' \
+  --out "$HOME/.wechat-mcp/captured-keys.json" \
+  --acknowledge-debug-launch
 ```
 
-#### summary.json 字段规范
+`--app` 改成你实际使用的微信 App。输出文件必须不存在。期间可能暂停、退出或要求手机确认登录；不执行管理员授权或修改签名。失败就停止排查，不要关闭系统保护。正常捕获结束后会尝试解除调试、保留微信运行；异常可能导致微信退出。
 
-```json
-{
-  "header": { "title", "date", "stats", "hot_word" },
-  "summary": ["省流结论"],
-  "topics": [{ "title", "time", "summary", "detail", "quotes": [{ "name", "avatar_name", "avatar_username", "content" }] }],
-  "activity": [{ "label": "HH:00", "count": N }],  // 必须 24 个点
-  "top_speakers": [{ "name", "count" }],  // 字段名是 count，不是 messages
-  "keyword_tags": ["热词"],
-  "report_meta": { "is_group", "activity_granularity", "raw_chars", "compressed_chars", "chars_saved", "estimated_tokens_saved", "compression_ratio" }
-}
-```
-
-⚠️ 禁止手写 JSON，必须由 AI 分析 context.json 后生成。完整流程见 `skill/SKILL.md`。
-
-## 联系人解析
-
-`resolve_name()` 三层 fallback，确保群聊总结中的发送者始终显示可读昵称：
-
-1. **contacts.json**（通讯录，6000+ 条）— 从 contact.db 解密获得
-2. **group_nicknames.json**（群成员补充映射）— 手动维护，用于通讯录中没有的群友
-3. **截断 wxid**（兜底）— 如 `wxid_psli7doelfml22` → `psli7do`
-
-### 刷新通讯录
+工具只保存通过目标数据库认证的密钥，不打印密钥。随后先验证数量，再安装：
 
 ```bash
-# 用现有密钥解密 contact.db 并更新 contacts.json
-cd wechat-mcp-macos && python3 -c "
-import json, os, sqlite3, sys
-sys.path.insert(0, 'backend/.venv/lib/python3.14/site-packages')
-from wechat_mcp_macos.decryptor import decrypt_database, decrypt_wal
-
-with open('wechat_keys.json') as f:
-    keys = json.load(f)
-contact_db = os.path.expanduser('~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_hx1vuhtjkb3v22_1dd5/db_storage/contact/contact.db')
-enc_key = keys.get('contact/contact.db')
-cache = os.path.expanduser('~/.wechat-mcp/decrypted/contact/contact.db')
-os.makedirs(os.path.dirname(cache), exist_ok=True)
-
-decrypt_database(contact_db, cache, enc_key)
-if os.path.exists(contact_db + '-wal'):
-    decrypt_wal(contact_db + '-wal', cache, enc_key)
-
-conn = sqlite3.connect(cache)
-contacts = {}
-for row in conn.execute('SELECT username, nick_name, remark FROM contact WHERE username != \"\"'):
-    uname, nick, remark = row
-    contacts[uname] = {'nickname': nick or '', 'remark': remark or ''}
-conn.close()
-
-with open('contacts.json', 'w') as f:
-    json.dump(contacts, f, ensure_ascii=False, indent=2)
-print(f'contacts.json updated: {len(contacts)} entries')
-"
+backend/.venv/bin/python scripts/import_claude_keys.py \
+  --source "$HOME/.wechat-mcp/captured-keys.json"
+backend/.venv/bin/python scripts/import_claude_keys.py \
+  --source "$HOME/.wechat-mcp/captured-keys.json" --apply
 ```
 
-若密钥过期，需重新运行 `sign_wechat.sh` + `extract_keys.sh`。
+### 4. 在 Claude 里使用
 
-## 项目结构
+完全退出并重新打开 Claude 桌面 App，确认本地连接 `work-wechat-readonly` 可用。可以依次说：
 
-```
-wechat-mcp-macos/
-├── backend/
-│   └── .venv/              # Python 运行时（wechat_mcp_macos 包）
-├── plugin/                 # Hana 插件（manifest.json + 4 tools）
-├── skill/                  # Hana Agent skill（含完整流程规范）
-├── prompts/                # Prompt 管理系统
-│   ├── registry.json       # trigger 定义
-│   ├── render.py           # 匹配引擎
-│   ├── templates/          # LLM prompt 模板文件
-│   └── summaries/          # 生成的长图与中间产物（.gitignore）
-├── scripts/                # 工具脚本
-│   ├── chat-summary-workflow.sh  # 总结流水线（prepare/render）
-│   ├── chat_query.py       # 日期区间查询
-│   ├── enrich_summary_json.py    # 注入统计、热度、活跃群友
-│   └── validate_summary_json.py  # JSON 格式校验
-├── pipeline.py             # 纯规则总结 + 联系人解析
-├── summary_img.py          # 长图渲染
-├── voice_to_text.py        # 语音转文字
-├── cleanup.py              # 中间数据清理（时间+容量双阈值）
-├── cleanup-policy.json     # 清理策略配置
-├── contacts.json           # 通讯录映射（从 contact.db 解密）
-├── group_nicknames.json    # 群成员补充昵称（fallback）
-├── crypto/                 # 解密模块
-├── tests/                  # 单元测试
-└── .gitignore
-```
+> 使用微信只读连接，检查连接状态。
+>
+> 读取文件传输助手最近一条消息。
+>
+> 列出微信群，找到日报群，读取最近 24 小时的消息，按群名和时间整理。
 
-## Hana 集成
+不需要再手动转发消息。Claude 是否可以持续追加到某个文件，取决于另行配置的文件访问能力，不是本读取连接自动完成的功能。
 
-### 安装 Skill
+## 数据保存在哪里
+
+| 位置 | 内容 |
+| --- | --- |
+| 项目目录 | 程序、依赖环境、文档和测试 |
+| `~/.wechat-mcp/config.json` | 明确选择的微信数据库目录 |
+| `~/.wechat-mcp/all_keys.json` | 已验证密钥，文件权限 0600 |
+| `~/.wechat-mcp/decrypted/` | 私有、按账户区分的解密缓存 |
+| `~/Library/Application Support/Claude/claude_desktop_config.json` | Claude MCP 连接配置 |
+
+密钥、数据库、联系人及聊天导出不应提交到 GitHub。运行时数据保存在项目目录之外。
+
+## 更新、故障排查与开发
+
+完整步骤、换账户、项目迁移和常见问题见 [Claude 使用指南](docs/CLAUDE.md)。
 
 ```bash
-cp -r skill ~/.hanako/skills/wechat-mcp-setup
+git pull --ff-only
+backend/.venv/bin/python -m pip install -r requirements.txt
+# 更新后完全退出并重新打开 Claude。
+
+# 开发测试，不需要读取真实聊天或重启微信。
+backend/.venv/bin/python -m unittest discover -s tests -v
 ```
 
-### 安装 Plugin
+当前锁定 `wechat-mcp-macos==0.1.1` 和 `fastmcp==4.1.4`，升级依赖后需重新验证。
 
-```bash
-cp -r plugin ~/.hanako/plugins/wechat-mcp
-```
+## 来源
 
-### 触发方式
-
-在 Hana Agent 中可直接说：
-- "检查微信状态"
-- "列出所有微信群"
-- "读一下 xxx 的消息"
-- "搜一下关于 xxx 的内容"
-- "总结琅泽群"
-
-插件通过 `execFileSync + JSON stdin → scripts/plugin_bridge.py` 调用仓库查询核心，避免字符串拼接与输入转义风险。
-
-读取与搜索均支持：
-- `date/start/end/today/yesterday/last/hours`
-- 默认 04:00 日界线
-- “我”与联系人/群成员身份识别
-- `avatar_username` 真实头像键
-- `page_size + cursor` 稳定分页，同一秒多条消息不会漏读
-
-## 日报长图默认内容
-
-当前 enrich + render 默认会在长图里补充：
-- 标题下统计说明：原始文本字数、压缩后字数、约减少的 tokens 百分比
-- 自适应热度曲线：单日/不超过 48 小时按小时，多日/周报按 04:00 逻辑日统计每天消息量
-- 活跃群友头像 + 名字 + 消息数
-- 关键词 tag
-- 省流版（自动过滤技术指标行，避免与顶部统计说明重复）
-
-## 渲染防裁切机制
-
-`summary_img.py` 内置了内容安全保护：
-- 预计算高度时预留 2x 安全余量，防止文字写出画布
-- 渲染完成后根据实际内容定位自动裁切多余空白
-- 若内容超出预计算范围，会自动扩展画布并补全纸张纹理
-
-## 中间数据清理
-
-`cleanup-policy.json` 同时控制时间与容量阈值。默认在每次 `chat-summary-workflow.sh prepare` 前执行：
-
-```bash
-# 只检查，不删除
-backend/.venv/bin/python cleanup.py --check
-
-# 正式清理
-backend/.venv/bin/python cleanup.py
-```
-
-默认策略：总结中间文件保留 7 天/上限 50 MB，最终图片保留 30 天/上限 100 MB，解密缓存保留 7 天/上限 500 MB，日志保留 30 天/上限 50 MB；每类始终保护最新文件。配置不触碰密钥、MCP 配置或微信原始数据库。
-
-## Prompt Registry
-
-按群/联系人自定义 prompt 模板，无需改代码。
-
-```json
-{
-  "prompts": [
-    {
-      "id": "langze-daily",
-      "name": "琅泽群每日总结",
-      "trigger": { "type": "group", "chats": ["58299288465@chatroom"] },
-      "process": { "mode": "llm", "template_file": "group-summary-image-json.txt" },
-      "output": { "text": true, "image": true }
-    }
-  ]
-}
-```
-
-匹配优先级：**精确匹配 → 类型回退（群/私聊）→ catchall**。
-
-## 决策规范
-
-1. **用户要数据** → 纯脚本返回结果
-2. **用户要分析** → 先脚本取数据，再 AI 理解
-3. **用户要总结/分析** → 区间取数 → AI 输出带 `avatar_username` 的 JSON → 默认生成图片
-4. **用户明确只要文字** → 才跳过图片
-5. **本人身份** → 展示名为“我”，真实 self wxid 用于消息统计和头像匹配
-6. **用户要发消息** → 生成文件，用户手动粘贴
-
-零 token 优先。
-
-## 依赖
-
-- macOS（Apple Silicon / Intel）
-- Python >= 3.10
-- Homebrew + sqlcipher + llvm
-- 微信 for Mac（已登录过）
-
-## 致谢
-
-- 解密模块来自 [wechat-digest](https://github.com/cliffyan28/wechat-digest) (MIT)
-- 密钥提取来自 [wechat-db-decrypt-macos](https://github.com/Thearas/wechat-db-decrypt-macos)
-- MCP Server 来自 [wechat-mcp-macos](https://pypi.org/project/wechat-mcp-macos/)
-
-## License
-
-MIT
+本项目基于 [yancongya/wechat-mcp-macos](https://github.com/yancongya/wechat-mcp-macos) fork，现聚焦 Claude 桌面版。数据库读取使用同名 Python backend；密钥捕获参考 [公开的启动捕获与逐库认证方案](https://gist.github.com/acmerfight/0a01249ef72970d07a2603dbb629e80f)，本仓库独立实现捕获脚本，不引入其自动改签名流程。保留 Git 历史中的来源与贡献记录。

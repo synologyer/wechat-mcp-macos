@@ -1,9 +1,0 @@
-{
-  "manifestVersion": 1,
-  "id": "wechat-mcp",
-  "name": "WeChat MCP",
-  "version": "0.3.0",
-  "description": "微信本地数据只读工具。支持群聊/私聊身份、任意日期区间、稳定分页、搜索和会话列表。",
-  "minAppVersion": "0.171.3",
-  "trust": "restricted"
-}
